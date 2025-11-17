@@ -10,9 +10,9 @@ A WLED UI extension for an easy control of the awesome new "Image" effect, capab
 It is using the ESP filesystem editor at `/edit` to list and change files on the local ESP storage.
 
 > [!WARNING]  
-> **The 'Image Effect' (GIF support) currently has not been added to the stable WLED release yet**
+> **The 'Image Effect' (GIF support) currently has not been merged into a stable WLED release yet**
 > 
-> To to anything useful with this UI, you will need to **use the current [WLED Nightly](https://github.com/wled/WLED/releases/tag/nightly)**, where the effect has been implemented. (as of 2025-06-26)
+> To to anything useful with this UI, you will need to **use the current [WLED Nightly](https://github.com/wled/WLED/releases/tag/nightly)**, where the effect has been implemented. (as of 2025-11-17)
 > 
 
 ## Features
