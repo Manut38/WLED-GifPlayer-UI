@@ -680,6 +680,7 @@
     const GIF_SPEED = 128; // effect speed 128 = original gif speed
     const ALLOWED_EXT = ["gif", "bmp", "png"];
     const URL_EDIT = "/edit";
+    const URL_UPLOAD = "/upload";
     const URL_JSON_STATE = "/json/state";
     const URL_JSON_INFO = "/json/info";
     const URL_PRESETS = "/presets.json";
@@ -826,7 +827,7 @@
     }
 
     async function images(forceReload = false) {
-      const url = `${WLED_URL}${URL_EDIT}?list=/`;
+      const url = `${WLED_URL}${URL_EDIT}?func=list&path=%2F`;
       // clear image list intially
       gId("image-list").innerHTML = "";
 
@@ -1089,7 +1090,7 @@
       let formData = new FormData();
       formData.append("data", file, `/${file.name}`);
 
-      const url = `${WLED_URL}${URL_EDIT}`;
+      const url = `${WLED_URL}${URL_UPLOAD}`;
       const options = {
         method: "POST",
         body: formData,
