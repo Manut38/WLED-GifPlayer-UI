@@ -988,11 +988,12 @@
         Object.assign(state, {
           on: true,
           seg: {
-            id: 0,
+            id: 0,                 // Only target first segment
             fx: FX_MODE_IMAGE,
-            frz: false,
-            sx: GIF_SPEED,
-            n: selectedImage.name,
+            frz: false,            // Unfreeze effect
+            sx: GIF_SPEED,         // Effect Speed
+            ix: 0,                 // Effect Intensity (Blur amount)
+            n: selectedImage.name, // Segment name = filename
           },
         });
       }
