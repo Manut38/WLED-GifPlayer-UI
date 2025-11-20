@@ -878,7 +878,11 @@
             "contextmenu",
             async (event) => {
               event.preventDefault();
-              selectedImage = { ...imageHolder.dataset };
+              selectedImage = {
+                src: imageHolder.dataset.src,
+                name: imageHolder.dataset.name,
+                path: imageHolder.dataset.path
+              };
               const nameEl = gId("imgDialogName");
               if (nameEl) nameEl.innerText = selectedImage.name;
               if (imgDialog && typeof imgDialog.showModal === "function") imgDialog.showModal();
@@ -910,7 +914,11 @@
           imageHolder.addEventListener(
             "click",
             (event) => {
-              selectedImage = { ...imageHolder.dataset };
+              selectedImage = {
+                src: imageHolder.dataset.src,
+                name: imageHolder.dataset.name,
+                path: imageHolder.dataset.path
+              };
               showImg();
             },
             false
