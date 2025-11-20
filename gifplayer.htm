@@ -681,6 +681,7 @@
     const ALLOWED_EXT = ["gif", "bmp", "png"];
     const URL_EDIT = "/edit";
     const URL_UPLOAD = "/upload";
+    const URL_JSON = "/json";
     const URL_JSON_STATE = "/json/state";
     const URL_JSON_INFO = "/json/info";
     const URL_PRESETS = "/presets.json";
@@ -1027,39 +1028,41 @@
 
     // save preset at new ID (highest preset ID+1), or overwrite existing preset
     async function savePreset() {
+      if (!selectedImage) {
+        toast("No image selected", "error");
+        return;
+      }
+
       await showImg();
       imgDialog.close();
       showLoading();
       await new Promise((resolve) => setTimeout(resolve, 500));
       await presets();
 
-      // find next lowest ID / ID of existing preset with segment name == image name
-      let existingPreset = findPresetID(selectedImage.name);
-      let items = Object.keys(presetsJson);
+      // find existing preset ID by segment name
+      const existingPresetId = findPresetID(selectedImage.name);
+      // compute next free ID if not existing
+      const keys = Object.keys(presetsJson || {});
+      const numericKeys = keys
+        .map((k) => parseInt(k))
+        .filter((n) => !isNaN(n) && isFinite(n));
+      const maxKey = numericKeys.length ? Math.max(...numericKeys) : -1;
+      const nextId = maxKey + 1;
+      const idToUse = existingPresetId !== null ? existingPresetId : nextId;
+      const pName =
+        existingPresetId !== null
+          ? presetsJson[idToUse]?.n ?? selectedImage.name.substring(0, selectedImage.name.lastIndexOf("."))
+          : selectedImage.name.substring(0, selectedImage.name.lastIndexOf("."));
 
-      // Ensure we get a valid numeric ID
-      const lastId = items.length > 0 ? Math.max(...items.filter(k => !isNaN(k)).map(k => parseInt(k))) : 0;
-      const id = existingPreset || lastId + 1;
-
-      const pName = existingPreset
-        ? presetsJson[id].n
-        : selectedImage.name.substring(0, selectedImage.name.lastIndexOf("."));
-
-      if (existingPreset) {
-        toast(`Preset '${pName}' already saved with ID ${id}`, "success");
-        hideLoading();
-        return;
-      }
-
-      let body = {
-        psave: parseInt(id),   // save to this ID
+      const body = {
+        psave: parseInt(idToUse),   // save to this ID
         n: pName,              // preset name
         ib: true,              // include brightness
         sb: true               // save segment bounds
       };
 
       try {
-        const url = `${WLED_URL}/json`;
+        const url = `${WLED_URL}${URL_JSON}`;
         const options = {
           method: "POST",
           headers: {
@@ -1077,20 +1080,17 @@
         const data = await response.json();
 
         if (data.success) {
-          toast(
-            `${
-              existingPreset ? "Modified" : "Saved as"
-            }  preset '${pName}' with ID ${id}`,
-            "success",
-            8000
-          );
-          window.parent.postMessage("loadPresets", WLED_URL);
-        } else {
-          throw new Error("WLED returned success: false");
-        }
+          toast(`${existingPresetId !== null ? "Modified" : "Saved as"} preset '${pName}' with ID ${idToUse}`, "success", 8000);
 
+          // ask parent to refresh if called from iframe
+          try {
+            window.parent?.postMessage?.("loadPresets", WLED_URL);
+          } catch (e) {}
+        } else {
+          throw new Error("WLED returned failure");
+        }
       } catch (error) {
-        console.error(error);
+        console.error("savePreset():", error);
         toast("Error saving preset", "error");
       } finally {
         await new Promise((resolve) => setTimeout(resolve, 2000)); // Add a delay before refreshing presets
@@ -1170,17 +1170,27 @@
       }
     }
 
-    function findPresetID(imageName) {
-        const items = Object.keys(presetsJson);
-        return items.find((key) =>
-            typeof presetsJson[key] === "object" &&
-            !presetsJson[key].playlist &&
-            presetsJson[key].seg &&
-            Array.isArray(presetsJson[key].seg) &&
-            presetsJson[key].seg.length > 0 &&
-            presetsJson[key].seg[0].fx === FX_MODE_IMAGE &&
-            presetsJson[key].seg[0].n === imageName
-        );
+    // returns numeric preset id or null
+    function findPresetID(segmentName) {
+      if (!presetsJson || typeof presetsJson !== "object")
+        return null;
+
+      const keys = Object.keys(presetsJson);
+      for (let key of keys) {
+        const preset = presetsJson[key];
+        if (
+          typeof preset === "object" &&
+          !preset.playlist &&
+          preset.seg &&
+          Array.isArray(preset.seg) &&
+          preset.seg[0]?.fx === FX_MODE_IMAGE &&
+          preset.seg[0]?.n === segmentName
+        ) {
+          const nkey = parseInt(key);
+          return isNaN(nkey) ? key : nkey;
+        }
+      }
+      return null;
     }
 
     // ===================
