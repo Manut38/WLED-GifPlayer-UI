@@ -746,6 +746,102 @@
     }
 
     // ===================
+    // Memory Cleanup Manager
+    // ===================
+    // Track all created object URLs so we can revoke them reliably.
+    const objectURLPool = new Set();
+
+    /**
+     * Track a created URL so it can be revoked later.
+     * @param {string} url
+     */
+    function trackURL(url) {
+      if (!url) return;
+      objectURLPool.add(url);
+    }
+
+    /**
+     * Revoke an object URL safely and remove from pool.
+     * @param {string} url
+     */
+    function revokeURL(url) {
+      if (!url) return;
+      try {
+        // only revoke if it looks like an object URL
+        if (typeof URL !== "undefined" && url.startsWith("blob:")) {
+          try {
+            URL.revokeObjectURL(url);
+          } catch (e) {
+            // ignore
+          }
+        }
+      } catch (e) {
+        // ignore
+      } finally {
+        objectURLPool.delete(url);
+      }
+    }
+
+    /**
+     * Revoke all tracked object URLs immediately.
+     */
+    function revokeAll() {
+      // Copy to array before iterating to avoid mutation issues.
+      const urls = Array.from(objectURLPool);
+      urls.forEach((u) => {
+        try {
+          revokeURL(u);
+        } catch (e) {
+          console.error("Failed revoking URL:", u, e);
+        }
+      });
+      objectURLPool.clear();
+    }
+
+    /**
+     * Helper to safely replace background-image of an element and revoke the previous one.
+     * If the caller passes an objectURL, it will be tracked automatically.
+     * @param {HTMLElement} el
+     * @param {string|null} objectUrl - the new URL or null to clear
+     */
+    function setElementBackgroundImage(el, objectUrl) {
+      if (!el) return;
+      // revoke previous one if present
+      const prev = el.dataset.objectUrl;
+      if (prev) {
+        // If same as new, do nothing.
+        if (prev === objectUrl) return;
+        revokeURL(prev);
+        delete el.dataset.objectUrl;
+      }
+      if (objectUrl) {
+        el.style.backgroundImage = `url(${objectUrl})`;
+        el.dataset.objectUrl = objectUrl;
+        trackURL(objectUrl);
+      } else {
+        el.style.backgroundImage = "";
+      }
+    }
+
+    /**
+     * When clearing nodes from the image list, revoke any background images they hold.
+     * @param {HTMLElement} container
+     */
+    function revokeBackgroundsInContainer(container) {
+      if (!container) return;
+      const children = Array.from(container.children);
+      children.forEach((child) => {
+        const u = child.dataset?.objectUrl;
+        if (u) {
+          revokeURL(u);
+          delete child.dataset.objectUrl;
+        }
+        // also clear style directly
+        child.style.backgroundImage = "";
+      });
+    }
+
+    // ===================
     // Global Variables
     // ===================
     const doc = document;
@@ -757,11 +853,11 @@
     let playbackState = {
       isPlaying: false,
       isStopped: true,
-      lastImage: null
+      lastImage: null,
     };
 
     // ===================
-    //  On Page Load
+    // On Page Load
     // ===================
 
     // get host address and build WLED_URL
@@ -777,6 +873,34 @@
 
     // load all info on page load
     loadInfo();
+
+    // Ensure automatic cleanup when leaving the page or when visibility changes.
+    window.addEventListener("beforeunload", () => {
+      // revoke tracked URLs synchronously before the page unloads
+      try {
+        revokeAll();
+      } catch (e) {}
+    });
+    window.addEventListener("pagehide", () => {
+      // pagehide fires on unload for some browsers — good to clean up here as well
+      try {
+        revokeAll();
+      } catch (e) {}
+    });
+    // When tab becomes hidden, free previews to avoid memory growth while user is away.
+    // Note: we don't revoke everything on hidden (that would break long-running downloads), but
+    // we do revoke previews and anything tracked.
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") {
+        // revoke all tracked previews to be safe
+        try {
+          revokeAll();
+          // Clear any dialog previews as well
+          const dialogImg = gId("imgDialogImg");
+          if (dialogImg) setElementBackgroundImage(dialogImg, null);
+        } catch (e) {}
+      }
+    });
 
     // ===================
     // Functions
@@ -799,9 +923,7 @@
 
     async function getImageBlob(src, forceReload = false) {
       try {
-        const options = forceReload
-          ? { cache: "reload" }
-          : { cache: "force-cache" };
+        const options = forceReload ? { cache: "reload" } : { cache: "force-cache" };
         const response = await fetch(src, options);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return await response.blob();
@@ -820,13 +942,21 @@
           throw new Error(`Failed to load image: ${imgName}`);
         }
         const objectURL = URL.createObjectURL(blob);
-        // set background and release objectURL after a short time once image set
-        imageHolder.style.backgroundImage = `url(${objectURL})`;
+        // set background and track the objectURL; revoke previous if present
+        setElementBackgroundImage(imageHolder, objectURL);
         imageHolder.classList.remove("loading");
-        // revoke after giving browser time to load (safe)
+        // Also set a safe delayed revoke — browsers will cache decoded image; we still track the URL so global revoke works.
+        // We'll revoke after 30s if it's still tracked (keeps memory bounded but not instantaneous).
         setTimeout(() => {
           try {
-            URL.revokeObjectURL(objectURL);
+            // Only revoke if it's still the same url assigned to the element (to avoid revoking a newly assigned url).
+            if (imageHolder.dataset.objectUrl === objectURL) {
+              revokeURL(objectURL);
+              delete imageHolder.dataset.objectUrl;
+              // Clear style only if the element still expects the image (some UIs keep thumbnails)
+              // We will NOT clear style here to avoid visual flicker; the browser keeps the rendered image.
+              // imageHolder.style.backgroundImage = "";
+            }
           } catch (e) {}
         }, 30000);
       } catch (error) {
@@ -838,7 +968,6 @@
     async function loadImages(imageHolders, forceReload = false) {
       let currentIndex = 0;
       let numRequests = 0;
-      let allImagesLoaded = false;
 
       // continue with requests until all images processed
       return new Promise((resolve) => {
@@ -866,13 +995,15 @@
 
     async function images(forceReload = false) {
       const url = `${WLED_URL}${URL_EDIT}?func=list&path=%2F`;
-      // clear image list intially
+      // clear image list initially — revoke any background images to prevent leaks
       const imageListEl = gId("image-list");
-      if (imageListEl) imageListEl.innerHTML = "";
-
+      if (imageListEl) {
+        // revoke backgrounds of existing children before removing them
+        revokeBackgroundsInContainer(imageListEl);
+        imageListEl.innerHTML = "";
+      }
       showLoading();
       hidePageContent();
-
       try {
         const response = await fetch(url, {
           signal: AbortSignal.timeout(8000),
@@ -885,7 +1016,6 @@
           const fileExt = name.split(".").pop().toLowerCase();
           return ALLOWED_EXT.includes(fileExt);
         });
-
         let imageHolders = [];
         imgs.forEach((image) => {
           const imageHolder = doc.createElement("div");
@@ -894,7 +1024,6 @@
           imageHolder.dataset.src = `${WLED_URL}/${image.name}`;
           imageHolder.dataset.name = image.name;
           imageHolder.dataset.path = `/${image.name}`;
-
           imageHolder.addEventListener(
             "contextmenu",
             async (event) => {
@@ -902,22 +1031,39 @@
               selectedImage = {
                 src: imageHolder.dataset.src,
                 name: imageHolder.dataset.name,
-                path: imageHolder.dataset.path
+                path: imageHolder.dataset.path,
               };
               const nameEl = gId("imgDialogName");
               if (nameEl) nameEl.innerText = selectedImage.name;
               if (imgDialog && typeof imgDialog.showModal === "function") imgDialog.showModal();
+              // load preview blob and set dialog preview; ensure previous dialog preview revoked
               let blob = await getImageBlob(selectedImage.src);
               if (blob) {
                 const objectURL = URL.createObjectURL(blob);
                 try {
-                  imageHolder.style.backgroundImage = `url(${objectURL})`;
+                  // set thumbnail and dialog preview but track & revoke previous cleanly
+                  setElementBackgroundImage(imageHolder, objectURL);
                   const dialogImg = gId("imgDialogImg");
-                  if (dialogImg) dialogImg.style.backgroundImage = `url(${objectURL})`;
+                  if (dialogImg) {
+                    // revoke any previous dialog image
+                    setElementBackgroundImage(dialogImg, objectURL);
+                  }
                 } finally {
+                  // Also schedule a safe revoke in 30s (we already track it so revokeAll can clear earlier)
                   setTimeout(() => {
                     try {
-                      URL.revokeObjectURL(objectURL);
+                      // if still tracked, revoke it
+                      if (objectURLPool.has(objectURL)) {
+                        revokeURL(objectURL);
+                        // clear from elements (if they still reference it)
+                        if (imageHolder.dataset.objectUrl === objectURL) {
+                          delete imageHolder.dataset.objectUrl;
+                        }
+                        const dialogImg = gId("imgDialogImg");
+                        if (dialogImg && dialogImg.dataset.objectUrl === objectURL) {
+                          delete dialogImg.dataset.objectUrl;
+                        }
+                      }
                     } catch (e) {}
                   }, 30000);
                 }
@@ -925,7 +1071,6 @@
             },
             false
           );
-
           ["mousedown", "touchstart"].forEach((evt) =>
             imageHolder.addEventListener(evt, () => imageHolder.classList.add("selected"), false)
           );
@@ -938,7 +1083,7 @@
               selectedImage = {
                 src: imageHolder.dataset.src,
                 name: imageHolder.dataset.name,
-                path: imageHolder.dataset.path
+                path: imageHolder.dataset.path,
               };
               showImg();
             },
@@ -947,7 +1092,6 @@
           if (imageListEl) imageListEl.appendChild(imageHolder);
           imageHolders.push(imageHolder);
         });
-
         // Load images asynchronously with concurrency limit
         await loadImages(imageHolders, forceReload);
         showPageContent();
@@ -1026,15 +1170,18 @@
         return;
       }
       const fileURL = URL.createObjectURL(blob);
+      // track and revoke later
+      trackURL(fileURL);
       const a = document.createElement("a");
       a.href = fileURL;
       a.download = selectedImage.name;
       doc.body.appendChild(a);
       a.click();
       doc.body.removeChild(a);
+      // revoke after a short time
       setTimeout(() => {
         try {
-          URL.revokeObjectURL(fileURL);
+          revokeURL(fileURL);
         } catch (e) {}
       }, 1000);
     }
@@ -1042,7 +1189,6 @@
     async function showImg() {
       if (!selectedImage) return;
       let state = {};
-
       // get existing preset ID if any
       const existingPresetId = findPresetID(selectedImage.name);
       if (existingPresetId !== null) {
@@ -1065,7 +1211,6 @@
           ],
         });
       }
-
       const url = `${WLED_URL}${URL_JSON_STATE}`;
       const options = {
         method: "POST",
@@ -1346,6 +1491,17 @@
           false
         )
       );
+
+      // Make sure to cleanup dialog previews when dialog closes
+      if (imgDialog) {
+        imgDialog.addEventListener("close", () => {
+          try {
+            const dialogImg = gId("imgDialogImg");
+            if (dialogImg) setElementBackgroundImage(dialogImg, null);
+          } catch (e) {}
+        }, false);
+      }
+
       addButtonHighlightEvents(["btnStop", "btnPlayPause"]);
       const btnStop = gId("btnStop");
       if (btnStop) btnStop.addEventListener("click", powerOff, false);
