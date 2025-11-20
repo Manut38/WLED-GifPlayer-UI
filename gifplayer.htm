@@ -1164,7 +1164,7 @@
         console.error("savePreset():", error);
         toast("Error saving preset", "error");
       } finally {
-        await new Promise((resolve) => setTimeout(resolve, 1000)); // Add a delay before refreshing presets
+        await new Promise((resolve) => setTimeout(resolve, 2000)); // Add a delay before refreshing presets
         await presets();
         hideLoading();
       }
