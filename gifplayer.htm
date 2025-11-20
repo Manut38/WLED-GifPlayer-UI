@@ -1034,10 +1034,13 @@
       await presets();
 
       // find next lowest ID / ID of existing preset with segment name == image name
-      let existingPreset = false;
-      existingPreset = findPresetID(selectedImage.name);
+      let existingPreset = findPresetID(selectedImage.name);
       let items = Object.keys(presetsJson);
-      const id = existingPreset || parseInt(items.pop()) + 1;
+
+      // Ensure we get a valid numeric ID
+      const lastId = items.length > 0 ? Math.max(...items.filter(k => !isNaN(k)).map(k => parseInt(k))) : 0;
+      const id = existingPreset || lastId + 1;
+
       const pName = existingPreset
         ? presetsJson[id].n
         : selectedImage.name.substring(0, selectedImage.name.lastIndexOf("."));
@@ -1048,22 +1051,32 @@
         return;
       }
 
-      let body = {};
-      Object.assign(body, {
-        psave: parseInt(id),
-        n: pName,
-      });
+      let body = {
+        psave: parseInt(id),   // save to this ID
+        n: pName,              // preset name
+        ib: true,              // include brightness
+        sb: true               // save segment bounds
+      };
 
       try {
         const url = `${WLED_URL}/json`;
         const options = {
           method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
           body: JSON.stringify(body),
         };
-        const response = await fetch(url, options);
-        const { success } = await response.json();
 
-        if (success) {
+        const response = await fetch(url, options);
+
+        if (!response.ok) {
+          throw new Error(`Save failed: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (data.success) {
           toast(
             `${
               existingPreset ? "Modified" : "Saved as"
@@ -1072,7 +1085,10 @@
             8000
           );
           window.parent.postMessage("loadPresets", WLED_URL);
+        } else {
+          throw new Error("WLED returned success: false");
         }
+
       } catch (error) {
         console.error(error);
         toast("Error saving preset", "error");
@@ -1154,16 +1170,17 @@
       }
     }
 
-    function findPresetID(segmentName) {
-      items = Object.keys(presetsJson);
-      return items.find(
-        (key) =>
-          typeof presetsJson[key] === "object" &&
-          !presetsJson[key].playlist &&
-          presetsJson[key].seg &&
-          presetsJson[key].seg[0].fx === FX_MODE_IMAGE &&
-          presetsJson[key].seg[0].n === segmentName
-      );
+    function findPresetID(imageName) {
+        const items = Object.keys(presetsJson);
+        return items.find((key) =>
+            typeof presetsJson[key] === "object" &&
+            !presetsJson[key].playlist &&
+            presetsJson[key].seg &&
+            Array.isArray(presetsJson[key].seg) &&
+            presetsJson[key].seg.length > 0 &&
+            presetsJson[key].seg[0].fx === FX_MODE_IMAGE &&
+            presetsJson[key].seg[0].n === imageName
+        );
     }
 
     // ===================
