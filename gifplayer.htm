@@ -1421,14 +1421,47 @@
       }
     }
 
+    async function restoreCurrentImageFromWLED() {
+      try {
+        const response = await fetch(`${WLED_URL}${URL_JSON_STATE}`);
+        if (!response.ok) return;
+
+        const state = await response.json();
+
+        // Look at the first segment (WLED usually uses seg 0 for GIF player)
+        const seg = state.seg?.[0] || state.seg;
+
+        if (seg && seg.fx === FX_MODE_IMAGE && seg.n) {
+          const currentImageName = seg.n.trim();
+
+          // Build a fake selectedImage object that matches what click/showImg expects
+          playbackState.lastImage = {
+            name: currentImageName,
+            src: `${WLED_URL}/${currentImageName}`,
+            path: `/${currentImageName}`
+          };
+
+          // Restore correct playback state
+          playbackState.isPlaying = !seg.frz;
+          playbackState.isStopped = false;
+
+          // Update button icon immediately
+          updatePlayPauseButton();
+
+          // Optional: show a small toast so user knows it remembered the image
+          toast(`Resumed "${currentImageName}"`, "success", 2000);
+        }
+      } catch (e) {
+        console.debug("Could not restore current image (probably offline or no image active)", e);
+      }
+    }
+
     async function loadInfo(clearCache = false) {
       try {
-        // await loading of image list, actual images will load asynchronously
         await images(clearCache);
-        // await loading of presets.json
         await presets();
-        // get storage used/total count
         storage();
+        await restoreCurrentImageFromWLED();
       } catch (e) {
         console.error("loadInfo():", e);
       }
