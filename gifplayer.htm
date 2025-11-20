@@ -696,25 +696,33 @@
     }
 
     function showLoading() {
-      gId("loading").style.display = "block";
+      const el = gId("loading");
+      if (el) el.style.display = "block";
     }
 
     function hideLoading() {
-      gId("loading").style.display = "none";
+      const el = gId("loading");
+      if (el) el.style.display = "none";
     }
 
     function showPageContent() {
-      gId("contentConnected").style.display = "block";
-      gId("reloadSiteBtn").style.display = "none";
-      gId("reloadImages").style.display = "block";
+      const content = gId("contentConnected");
+      if (content) content.style.display = "block";
+      const reloadBtn = gId("reloadSiteBtn");
+      if (reloadBtn) reloadBtn.style.display = "none";
+      const reloadImages = gId("reloadImages");
+      if (reloadImages) reloadImages.style.display = "block";
     }
 
     function hidePageContent() {
-      gId("contentConnected").style.display = "none";
-      gId("reloadImages").style.display = "none";
+      const content = gId("contentConnected");
+      if (content) content.style.display = "none";
+      const reloadImages = gId("reloadImages");
+      if (reloadImages) reloadImages.style.display = "none";
     }
 
     function validateFile(file) {
+      if (!file) return false;
       const fileExt = file.name.split(".").pop().toLowerCase();
       if (ALLOWED_EXT.includes(fileExt)) {
         return true;
@@ -726,19 +734,13 @@
 
     function addButtonHighlightEvents(btnIds) {
       btnIds.forEach((btn) => {
+        const el = gId(btn);
+        if (!el) return;
         ["mousedown", "touchstart"].forEach((evt) =>
-          gId(btn).addEventListener(
-            evt,
-            () => gId(btn).classList.add("selected"),
-            false
-          )
+          el.addEventListener(evt, () => el.classList.add("selected"), false)
         );
         ["mouseup", "touchend", "mouseleave"].forEach((evt) =>
-          gId(btn).addEventListener(
-            evt,
-            () => gId(btn).classList.remove("selected"),
-            false
-          )
+          el.addEventListener(evt, () => el.classList.remove("selected"), false)
         );
       });
     }
