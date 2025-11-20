@@ -1410,8 +1410,7 @@
         const response = await fetch(url, options);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const json = await response.json();
-        const success = json.success ?? true;
-        if (success) {
+        if (json.success ?? true) {
           playbackState.isPlaying = !playbackState.isPlaying;
           updatePlayPauseButton();
           toast(playbackState.isPlaying ? "Playback resumed" : "Playback paused", "success", 1000);
@@ -1423,36 +1422,52 @@
 
     async function restoreCurrentImageFromWLED() {
       try {
-        const response = await fetch(`${WLED_URL}${URL_JSON_STATE}`);
+        const response = await fetch(`${WLED_URL}${URL_JSON_STATE}`, { cache: "no-cache" });
         if (!response.ok) return;
 
         const state = await response.json();
 
-        // Look at the first segment (WLED usually uses seg 0 for GIF player)
-        const seg = state.seg?.[0] || state.seg;
+        // Reset to safe default state
+        playbackState.isPlaying = false;
+        playbackState.isStopped = true;
+        playbackState.lastImage = null;
 
-        if (seg && seg.fx === FX_MODE_IMAGE && seg.n) {
-          const currentImageName = seg.n.trim();
+        // Must be powered ON
+        if (!state.on) {
+          updatePlayPauseButton();
+          return;
+        }
 
-          // Build a fake selectedImage object that matches what click/showImg expects
+        // Find the segment that is actually active (usually seg[0], but respect selected ones)
+        const segments = Array.isArray(state.seg) ? state.seg : [state.seg];
+        const activeSeg = segments.find(s => s.id === state.mainseg) || segments[0];
+
+        // Only restore if it's the Image effect (53) and has a filename
+        if (activeSeg && activeSeg.fx === FX_MODE_IMAGE && activeSeg.n && activeSeg.n.trim() !== "") {
+          const imageName = activeSeg.n.trim();
+
           playbackState.lastImage = {
-            name: currentImageName,
-            src: `${WLED_URL}/${currentImageName}`,
-            path: `/${currentImageName}`
+            name: imageName,
+            src: `${WLED_URL}/${imageName}`,
+            path: `/${imageName}`
           };
 
-          // Restore correct playback state
-          playbackState.isPlaying = !seg.frz;
           playbackState.isStopped = false;
+          playbackState.isPlaying = !activeSeg.frz;  // frozen = paused
 
-          // Update button icon immediately
-          updatePlayPauseButton();
-
-          // Optional: show a small toast so user knows it remembered the image
-          toast(`Resumed "${currentImageName}"`, "success", 2000);
+          toast(`Resumed "${imageName}"`, "success", 2000);
         }
+        // In all other cases (Solid, other effects, no name, etc.): treat as stopped
+
+        updatePlayPauseButton();
+
       } catch (e) {
-        console.debug("Could not restore current image (probably offline or no image active)", e);
+        console.debug("Failed to restore WLED state (offline or error)", e);
+        // On error: assume stopped (safe default)
+        playbackState.isPlaying = false;
+        playbackState.isStopped = true;
+        playbackState.lastImage = null;
+        updatePlayPauseButton();
       }
     }
 
