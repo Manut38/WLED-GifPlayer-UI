@@ -336,18 +336,37 @@
         margin-bottom: 0;
       }
 
-      #loading {
-        content: "";
-        display: block;
-        position: absolute;
-        left: 50px;
-        top: calc(50% - 14px);
-        width: 28px;
-        height: 28px;
-        border: 4px solid var(--gray-light);
-        border-top-color: var(--gray-dark);
+      #loading-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(17, 17, 17, 0.85);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.3s ease, visibility 0.3s ease;
+      }
+      #loading-overlay.active {
+        opacity: 1;
+        visibility: visible;
+      }
+      #loading-spinner {
+        width: 64px;
+        height: 64px;
+        border: 6px solid var(--gray-light);
+        border-top-color: var(--blue-light);
         border-radius: 50%;
-        animation: fadeIn 1s ease both, spin 1s linear infinite;
+        animation: spin 1s linear infinite;
+        margin-bottom: 20px;
+      }
+      #loading-text {
+        color: var(--gray-light);
+        font-size: 1.2rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
       }
 
       .fade-in {
@@ -448,11 +467,6 @@
         .header {
           padding-block: 10px;
         }
-        #loading {
-          left: 5px;
-          bottom: -35px;
-          top: unset;
-        }
       }
 
       @keyframes spin {
@@ -514,6 +528,11 @@
   </head>
 
   <body>
+    <div id="loading-overlay">
+      <div id="loading-spinner"></div>
+      <div id="loading-text">Loading...</div>
+    </div>
+
     <div class="container">
       <div class="content">
         <div class="header">
@@ -522,7 +541,6 @@
             class="btn-icon back"
             onclick="window.location.href = WLED_URL;"
           ></div>
-          <div class="" id="loading"></div>
           <span class="title"
             ><img
               alt=""
@@ -696,13 +714,12 @@
     }
 
     function showLoading() {
-      const el = gId("loading");
-      if (el) el.style.display = "block";
+      const overlay = document.getElementById("loading-overlay");
+      if (overlay) overlay.classList.add("active");
     }
-
     function hideLoading() {
-      const el = gId("loading");
-      if (el) el.style.display = "none";
+      const overlay = document.getElementById("loading-overlay");
+      if (overlay) overlay.classList.remove("active");
     }
 
     function showPageContent() {
