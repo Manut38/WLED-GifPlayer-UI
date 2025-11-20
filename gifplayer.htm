@@ -754,6 +754,11 @@
     let selectedImage = null;
     let presetsJson = {};
     let WLED_URL = "0.0.0.0";
+    let playbackState = {
+      isPlaying: false,
+      isStopped: true,
+      lastImage: null
+    };
 
     // ===================
     //  On Page Load
@@ -776,6 +781,22 @@
     // ===================
     // Functions
     // ===================
+    function updatePlayPauseButton() {
+      const btn = gId("btnPlayPause");
+      if (!btn) return;
+
+      if (playbackState.isStopped) {
+        btn.classList.remove("pause");
+        btn.classList.add("play");
+      } else if (playbackState.isPlaying) {
+        btn.classList.remove("play");
+        btn.classList.add("pause");
+      } else {
+        btn.classList.remove("pause");
+        btn.classList.add("play");
+      }
+    }
+
     async function getImageBlob(src, forceReload = false) {
       try {
         const options = forceReload
@@ -1060,6 +1081,10 @@
         const json = await response.json();
         const success = json.success ?? json?.state?.on ?? true;
         if (success) {
+          playbackState.isPlaying = true;
+          playbackState.isStopped = false;
+          playbackState.lastImage = selectedImage;
+          updatePlayPauseButton();
           if (existingPresetId !== null) {
             toast(`Preset '${presetsJson[existingPresetId]?.n ?? existingPresetId}' loaded`, "success", 1000);
           } else {
@@ -1188,6 +1213,9 @@
         const json = await response.json();
         const success = json.success ?? true;
         if (success) {
+          playbackState.isPlaying = false;
+          playbackState.isStopped = true;
+          updatePlayPauseButton();
           toast("Playback stopped", "success", 1000);
         }
       } catch (error) {
@@ -1197,6 +1225,19 @@
 
     async function playPause() {
       const url = `${WLED_URL}${URL_JSON_STATE}`;
+
+      // If stopped, restart with last image
+      if (playbackState.isStopped) {
+        if (playbackState.lastImage) {
+          selectedImage = playbackState.lastImage;
+          await showImg();
+        } else {
+          toast("No image to play. Select an image first.", "warning");
+        }
+        return;
+      }
+
+      // Otherwise toggle freeze
       try {
         const options = {
           method: "POST",
@@ -1208,7 +1249,9 @@
         const json = await response.json();
         const success = json.success ?? true;
         if (success) {
-          toast("Playback paused/resumed", "success", 1000);
+          playbackState.isPlaying = !playbackState.isPlaying;
+          updatePlayPauseButton();
+          toast(playbackState.isPlaying ? "Playback resumed" : "Playback paused", "success", 1000);
         }
       } catch (error) {
         console.error("playPause():", error);
