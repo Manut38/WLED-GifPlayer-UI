@@ -336,18 +336,37 @@
         margin-bottom: 0;
       }
 
-      #loading {
-        content: "";
-        display: block;
-        position: absolute;
-        left: 50px;
-        top: calc(50% - 14px);
-        width: 28px;
-        height: 28px;
-        border: 4px solid var(--gray-light);
-        border-top-color: var(--gray-dark);
+      #loading-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(17, 17, 17, 0.85);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.3s ease, visibility 0.3s ease;
+      }
+      #loading-overlay.active {
+        opacity: 1;
+        visibility: visible;
+      }
+      #loading-spinner {
+        width: 64px;
+        height: 64px;
+        border: 6px solid var(--gray-light);
+        border-top-color: var(--blue-light);
         border-radius: 50%;
-        animation: fadeIn 1s ease both, spin 1s linear infinite;
+        animation: spin 1s linear infinite;
+        margin-bottom: 20px;
+      }
+      #loading-text {
+        color: var(--gray-light);
+        font-size: 1.2rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
       }
 
       .fade-in {
@@ -448,11 +467,6 @@
         .header {
           padding-block: 10px;
         }
-        #loading {
-          left: 5px;
-          bottom: -35px;
-          top: unset;
-        }
       }
 
       @keyframes spin {
@@ -514,6 +528,11 @@
   </head>
 
   <body>
+    <div id="loading-overlay">
+      <div id="loading-spinner"></div>
+      <div id="loading-text">Loading...</div>
+    </div>
+
     <div class="container">
       <div class="content">
         <div class="header">
@@ -522,7 +541,6 @@
             class="btn-icon back"
             onclick="window.location.href = WLED_URL;"
           ></div>
-          <div class="" id="loading"></div>
           <span class="title"
             ><img
               alt=""
@@ -681,6 +699,7 @@
     const ALLOWED_EXT = ["gif", "bmp", "png"];
     const URL_EDIT = "/edit";
     const URL_UPLOAD = "/upload";
+    const URL_JSON = "/json";
     const URL_JSON_STATE = "/json/state";
     const URL_JSON_INFO = "/json/info";
     const URL_PRESETS = "/presets.json";
@@ -695,25 +714,32 @@
     }
 
     function showLoading() {
-      gId("loading").style.display = "block";
+      const overlay = gId("loading-overlay");
+      if (overlay) overlay.classList.add("active");
     }
-
     function hideLoading() {
-      gId("loading").style.display = "none";
+      const overlay = gId("loading-overlay");
+      if (overlay) overlay.classList.remove("active");
     }
 
     function showPageContent() {
-      gId("contentConnected").style.display = "block";
-      gId("reloadSiteBtn").style.display = "none";
-      gId("reloadImages").style.display = "block";
+      const content = gId("contentConnected");
+      if (content) content.style.display = "block";
+      const reloadBtn = gId("reloadSiteBtn");
+      if (reloadBtn) reloadBtn.style.display = "none";
+      const reloadImages = gId("reloadImages");
+      if (reloadImages) reloadImages.style.display = "block";
     }
 
     function hidePageContent() {
-      gId("contentConnected").style.display = "none";
-      gId("reloadImages").style.display = "none";
+      const content = gId("contentConnected");
+      if (content) content.style.display = "none";
+      const reloadImages = gId("reloadImages");
+      if (reloadImages) reloadImages.style.display = "none";
     }
 
     function validateFile(file) {
+      if (!file) return false;
       const fileExt = file.name.split(".").pop().toLowerCase();
       if (ALLOWED_EXT.includes(fileExt)) {
         return true;
@@ -725,20 +751,110 @@
 
     function addButtonHighlightEvents(btnIds) {
       btnIds.forEach((btn) => {
+        const el = gId(btn);
+        if (!el) return;
         ["mousedown", "touchstart"].forEach((evt) =>
-          gId(btn).addEventListener(
-            evt,
-            () => gId(btn).classList.add("selected"),
-            false
-          )
+          el.addEventListener(evt, () => el.classList.add("selected"), false)
         );
         ["mouseup", "touchend", "mouseleave"].forEach((evt) =>
-          gId(btn).addEventListener(
-            evt,
-            () => gId(btn).classList.remove("selected"),
-            false
-          )
+          el.addEventListener(evt, () => el.classList.remove("selected"), false)
         );
+      });
+    }
+
+    // ===================
+    // Memory Cleanup Manager
+    // ===================
+    // Track all created object URLs so we can revoke them reliably.
+    const objectURLPool = new Set();
+
+    /**
+     * Track a created URL so it can be revoked later.
+     * @param {string} url
+     */
+    function trackURL(url) {
+      if (!url) return;
+      objectURLPool.add(url);
+    }
+
+    /**
+     * Revoke an object URL safely and remove from pool.
+     * @param {string} url
+     */
+    function revokeURL(url) {
+      if (!url) return;
+      try {
+        // only revoke if it looks like an object URL
+        if (typeof URL !== "undefined" && url.startsWith("blob:")) {
+          try {
+            URL.revokeObjectURL(url);
+          } catch (e) {
+            // ignore
+          }
+        }
+      } catch (e) {
+        // ignore
+      } finally {
+        objectURLPool.delete(url);
+      }
+    }
+
+    /**
+     * Revoke all tracked object URLs immediately.
+     */
+    function revokeAll() {
+      // Copy to array before iterating to avoid mutation issues.
+      const urls = Array.from(objectURLPool);
+      urls.forEach((u) => {
+        try {
+          revokeURL(u);
+        } catch (e) {
+          console.error("Failed revoking URL:", u, e);
+        }
+      });
+      objectURLPool.clear();
+    }
+
+    /**
+     * Helper to safely replace background-image of an element and revoke the previous one.
+     * If the caller passes an objectURL, it will be tracked automatically.
+     * @param {HTMLElement} el
+     * @param {string|null} objectUrl - the new URL or null to clear
+     */
+    function setElementBackgroundImage(el, objectUrl) {
+      if (!el) return;
+      // revoke previous one if present
+      const prev = el.dataset.objectUrl;
+      if (prev) {
+        // If same as new, do nothing.
+        if (prev === objectUrl) return;
+        revokeURL(prev);
+        delete el.dataset.objectUrl;
+      }
+      if (objectUrl) {
+        el.style.backgroundImage = `url(${objectUrl})`;
+        el.dataset.objectUrl = objectUrl;
+        trackURL(objectUrl);
+      } else {
+        el.style.backgroundImage = "";
+      }
+    }
+
+    /**
+     * When clearing nodes from the image list, revoke any background images they hold.
+     * @param {HTMLElement} container
+     */
+    function revokeBackgroundsInContainer(container) {
+      if (!container) return;
+      const children = Array.from(container.children);
+      children.forEach((child) => {
+        const u = child.dataset?.objectUrl;
+        if (u) {
+          revokeURL(u);
+          delete child.dataset.objectUrl;
+        }
+        // also clear style directly
+        child.style.backgroundImage = "";
       });
     }
 
@@ -748,12 +864,17 @@
     const doc = document;
     const imgDialog = gId("imgDialog");
     const settingsDialog = gId("settingsDialog");
-    let selectedImage;
+    let selectedImage = null;
     let presetsJson = {};
     let WLED_URL = "0.0.0.0";
+    let playbackState = {
+      isPlaying: false,
+      isStopped: true,
+      lastImage: null,
+    };
 
     // ===================
-    //  On Page Load
+    // On Page Load
     // ===================
 
     // get host address and build WLED_URL
@@ -770,18 +891,62 @@
     // load all info on page load
     loadInfo();
 
+    // Ensure automatic cleanup when leaving the page or when visibility changes.
+    window.addEventListener("beforeunload", () => {
+      // revoke tracked URLs synchronously before the page unloads
+      try {
+        revokeAll();
+      } catch (e) {}
+    });
+    window.addEventListener("pagehide", () => {
+      // pagehide fires on unload for some browsers — good to clean up here as well
+      try {
+        revokeAll();
+      } catch (e) {}
+    });
+    // When tab becomes hidden, free previews to avoid memory growth while user is away.
+    // Note: we don't revoke everything on hidden (that would break long-running downloads), but
+    // we do revoke previews and anything tracked.
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") {
+        // revoke all tracked previews to be safe
+        try {
+          revokeAll();
+          // Clear any dialog previews as well
+          const dialogImg = gId("imgDialogImg");
+          if (dialogImg) setElementBackgroundImage(dialogImg, null);
+        } catch (e) {}
+      }
+    });
+
     // ===================
     // Functions
     // ===================
+    function updatePlayPauseButton() {
+      const btn = gId("btnPlayPause");
+      if (!btn) return;
+
+      if (playbackState.isStopped) {
+        btn.classList.remove("pause");
+        btn.classList.add("play");
+      } else if (playbackState.isPlaying) {
+        btn.classList.remove("play");
+        btn.classList.add("pause");
+      } else {
+        btn.classList.remove("pause");
+        btn.classList.add("play");
+      }
+    }
+
     async function getImageBlob(src, forceReload = false) {
       try {
-        const options = forceReload
-          ? { cache: "reload" }
-          : { cache: "force-cache" };
+        const options = forceReload ? { cache: "reload" } : { cache: "force-cache" };
         const response = await fetch(src, options);
-        return response.blob();
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return await response.blob();
       } catch (error) {
-        console.error(error);
+        console.error("getImageBlob:", error);
+        return null;
       }
     }
 
@@ -794,121 +959,166 @@
           throw new Error(`Failed to load image: ${imgName}`);
         }
         const objectURL = URL.createObjectURL(blob);
-        imageHolder.style.backgroundImage = `url(${objectURL})`;
+        // set background and track the objectURL; revoke previous if present
+        setElementBackgroundImage(imageHolder, objectURL);
         imageHolder.classList.remove("loading");
+        // Also set a safe delayed revoke — browsers will cache decoded image; we still track the URL so global revoke works.
+        // We'll revoke after 30s if it's still tracked (keeps memory bounded but not instantaneous).
+        setTimeout(() => {
+          try {
+            // Only revoke if it's still the same url assigned to the element (to avoid revoking a newly assigned url).
+            if (imageHolder.dataset.objectUrl === objectURL) {
+              revokeURL(objectURL);
+              delete imageHolder.dataset.objectUrl;
+              // Clear style only if the element still expects the image (some UIs keep thumbnails)
+              // We will NOT clear style here to avoid visual flicker; the browser keeps the rendered image.
+              // imageHolder.style.backgroundImage = "";
+            }
+          } catch (e) {}
+        }, 30000);
       } catch (error) {
-        console.error(error);
+        console.error("loadImage:", error);
+        imageHolder.classList.remove("loading");
       }
     }
 
     async function loadImages(imageHolders, forceReload = false) {
       let currentIndex = 0;
       let numRequests = 0;
-      let allImagesLoaded = false;
 
-      // continue with requests until all img are loaded
-      while (!allImagesLoaded) {
-        // watch the concurrent request limit
-        while (
-          numRequests < MAX_CONCURRENT_REQUESTS &&
-          currentIndex < imageHolders.length
-        ) {
-          loadImage(imageHolders[currentIndex], forceReload).finally(() => {
-            numRequests--;
-          });
-          currentIndex++;
-          numRequests++;
-        }
-        if (currentIndex >= images.length && numRequests === 0) {
-          allImagesLoaded = true;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 5)); // Add a small delay before checking conditions again
-      }
+      // continue with requests until all images processed
+      return new Promise((resolve) => {
+        const checkQueue = async () => {
+          while (
+            numRequests < MAX_CONCURRENT_REQUESTS &&
+            currentIndex < imageHolders.length
+          ) {
+            const idx = currentIndex++;
+            numRequests++;
+            loadImage(imageHolders[idx], forceReload).finally(() => {
+              numRequests--;
+            });
+          }
+
+          if (currentIndex >= imageHolders.length && numRequests === 0) {
+            resolve();
+            return;
+          }
+          setTimeout(checkQueue, 10);
+        };
+        checkQueue();
+      });
     }
 
     async function images(forceReload = false) {
       const url = `${WLED_URL}${URL_EDIT}?func=list&path=%2F`;
-      // clear image list intially
-      gId("image-list").innerHTML = "";
-
+      // clear image list initially — revoke any background images to prevent leaks
+      const imageListEl = gId("image-list");
+      if (imageListEl) {
+        // revoke backgrounds of existing children before removing them
+        revokeBackgroundsInContainer(imageListEl);
+        imageListEl.innerHTML = "";
+      }
       showLoading();
       hidePageContent();
-
       try {
         const response = await fetch(url, {
           signal: AbortSignal.timeout(8000),
         });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
-        const images = data.filter((file) => {
+        const imgs = data.filter((file) => {
           const { name } = file;
           file.name = name.replace("/", "");
           const fileExt = name.split(".").pop().toLowerCase();
           return ALLOWED_EXT.includes(fileExt);
         });
-
-        let imageList = gId("image-list");
         let imageHolders = [];
-        images.forEach((image) => {
+        imgs.forEach((image) => {
           const imageHolder = doc.createElement("div");
           imageHolder.classList.add("image-holder");
           imageHolder.classList.add("loading");
           imageHolder.dataset.src = `${WLED_URL}/${image.name}`;
           imageHolder.dataset.name = image.name;
           imageHolder.dataset.path = `/${image.name}`;
-
           imageHolder.addEventListener(
             "contextmenu",
             async (event) => {
               event.preventDefault();
-              selectedImage = imageHolder.dataset;
-              gId("imgDialogName").innerText = selectedImage.name;
-              imgDialog.showModal();
+              selectedImage = {
+                src: imageHolder.dataset.src,
+                name: imageHolder.dataset.name,
+                path: imageHolder.dataset.path,
+              };
+              const nameEl = gId("imgDialogName");
+              if (nameEl) nameEl.innerText = selectedImage.name;
+              if (imgDialog && typeof imgDialog.showModal === "function") imgDialog.showModal();
+              // load preview blob and set dialog preview; ensure previous dialog preview revoked
               let blob = await getImageBlob(selectedImage.src);
-              const objectURL = URL.createObjectURL(blob);
-              imageHolder.style.backgroundImage = `url(${objectURL})`;
-              gId("imgDialogImg").style.backgroundImage = `url(${objectURL})`;
+              if (blob) {
+                const objectURL = URL.createObjectURL(blob);
+                try {
+                  // set thumbnail and dialog preview but track & revoke previous cleanly
+                  setElementBackgroundImage(imageHolder, objectURL);
+                  const dialogImg = gId("imgDialogImg");
+                  if (dialogImg) {
+                    // revoke any previous dialog image
+                    setElementBackgroundImage(dialogImg, objectURL);
+                  }
+                } finally {
+                  // Also schedule a safe revoke in 30s (we already track it so revokeAll can clear earlier)
+                  setTimeout(() => {
+                    try {
+                      // if still tracked, revoke it
+                      if (objectURLPool.has(objectURL)) {
+                        revokeURL(objectURL);
+                        // clear from elements (if they still reference it)
+                        if (imageHolder.dataset.objectUrl === objectURL) {
+                          delete imageHolder.dataset.objectUrl;
+                        }
+                        const dialogImg = gId("imgDialogImg");
+                        if (dialogImg && dialogImg.dataset.objectUrl === objectURL) {
+                          delete dialogImg.dataset.objectUrl;
+                        }
+                      }
+                    } catch (e) {}
+                  }, 30000);
+                }
+              }
             },
             false
           );
           ["mousedown", "touchstart"].forEach((evt) =>
-            imageHolder.addEventListener(
-              evt,
-              () => {
-                imageHolder.classList.add("selected");
-              },
-              false
-            )
+            imageHolder.addEventListener(evt, () => imageHolder.classList.add("selected"), false)
           );
           ["mouseup", "touchend", "mouseleave"].forEach((evt) =>
-            imageHolder.addEventListener(
-              evt,
-              () => {
-                imageHolder.classList.remove("selected");
-              },
-              false
-            )
+            imageHolder.addEventListener(evt, () => imageHolder.classList.remove("selected"), false)
           );
           imageHolder.addEventListener(
             "click",
             (event) => {
-              selectedImage = imageHolder.dataset;
+              selectedImage = {
+                src: imageHolder.dataset.src,
+                name: imageHolder.dataset.name,
+                path: imageHolder.dataset.path,
+              };
               showImg();
             },
             false
           );
-          imageList.appendChild(imageHolder);
+          if (imageListEl) imageListEl.appendChild(imageHolder);
           imageHolders.push(imageHolder);
         });
-
-        // Load images asynchronously
-        loadImages(imageHolders, forceReload);
+        // Load images asynchronously with concurrency limit
+        await loadImages(imageHolders, forceReload);
         showPageContent();
         return Promise.resolve("Image list received");
       } catch (error) {
-        console.error(error);
+        console.error("images():", error);
         toast("Failed to get image list", "error", 10000);
-        gId("reloadSiteBtn").style.display = "block";
-        return Promise.reject("Failed to get image list");
+        const reloadBtn = gId("reloadSiteBtn");
+        if (reloadBtn) reloadBtn.style.display = "block";
+        return Promise.reject(error);
       } finally {
         hideLoading();
       }
@@ -917,11 +1127,15 @@
     async function presets() {
       const url = `${WLED_URL}${URL_PRESETS}`;
       try {
-        const response = await fetch(url);
+        const response = await fetch(url, {
+          cache: "no-cache",
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
         presetsJson = await response.json();
       } catch (error) {
-        console.error(error);
+        console.error("presets():", error);
         toast("Error loading presets. Malformed JSON? ", "error");
+        presetsJson = {};
       }
     }
 
@@ -931,30 +1145,33 @@
         const response = await fetch(url, {
           signal: AbortSignal.timeout(10000),
         });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const info = await response.json();
-        gId("fsUsed").innerHTML = `${info.fs.u}`;
-        gId("fsTotal").innerHTML = `${info.fs.t}`;
-        gId("storage").style.display = "block";
+        const fsUsedEl = gId("fsUsed");
+        const fsTotalEl = gId("fsTotal");
+        if (fsUsedEl) fsUsedEl.innerHTML = `${info.fs?.u ?? "?"}`;
+        if (fsTotalEl) fsTotalEl.innerHTML = `${info.fs?.t ?? "?"}`;
+        const storageEl = gId("storage");
+        if (storageEl) storageEl.style.display = "block";
       } catch (error) {
-        console.error(error);
+        console.error("storage():", error);
       }
     }
 
     async function deleteImage() {
+      if (!selectedImage || !selectedImage.path) return;
       if (!confirm("Are you sure you want to delete this image?")) return;
 
-      const url = `${WLED_URL}/edit?func=delete&path=` + selectedImage.path;
+      const url = `${WLED_URL}/edit?func=delete&path=` + encodeURIComponent(selectedImage.path);
       const options = {
         method: "GET",
       };
-      imgDialog.close();
+      if (imgDialog && typeof imgDialog.close === "function") imgDialog.close();
       try {
         const response = await fetch(url, options);
-        if (!response.ok) {
-          throw new Error(response.status);
-        }
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
         toast("Image deleted (if not currently in use)");
-        loadInfo();
+        await loadInfo();
       } catch (error) {
         const msg = `Error deleting image: ${error}`;
         console.error(msg);
@@ -963,118 +1180,151 @@
     }
 
     async function downloadImg() {
-      const fileURL = URL.createObjectURL(
-        await getImageBlob(selectedImage.src)
-      );
+      if (!selectedImage || !selectedImage.src) return;
+      const blob = await getImageBlob(selectedImage.src);
+      if (!blob) {
+        toast("Failed to download image", "error");
+        return;
+      }
+      const fileURL = URL.createObjectURL(blob);
+      // track and revoke later
+      trackURL(fileURL);
       const a = document.createElement("a");
       a.href = fileURL;
       a.download = selectedImage.name;
       doc.body.appendChild(a);
       a.click();
       doc.body.removeChild(a);
-      URL.revokeObjectURL(fileURL);
+      // revoke after a short time
+      setTimeout(() => {
+        try {
+          revokeURL(fileURL);
+        } catch (e) {}
+      }, 1000);
     }
 
     async function showImg() {
+      if (!selectedImage) return;
       let state = {};
-
-      let existingPreset = findPresetID(selectedImage.name);
-      if (existingPreset) {
+      // get existing preset ID if any
+      const existingPresetId = findPresetID(selectedImage.name);
+      if (existingPresetId !== null) {
         Object.assign(state, {
           on: true,
-          ps: existingPreset,
+          ps: existingPresetId,
         });
       } else {
         Object.assign(state, {
           on: true,
-          seg: {
-            id: 0,                 // Only target first segment
-            fx: FX_MODE_IMAGE,
-            frz: false,            // Unfreeze effect
-            sx: GIF_SPEED,         // Effect Speed
-            ix: 0,                 // Effect Intensity (Blur amount)
-            n: selectedImage.name, // Segment name = filename
-          },
+          seg: [
+            {
+              id: 0, // Only target first segment
+              fx: FX_MODE_IMAGE,
+              frz: false, // Unfreeze effect
+              sx: GIF_SPEED, // Effect Speed
+              ix: 0, // Effect Intensity (Blur amount)
+              n: selectedImage.name, // Segment name = filename
+            },
+          ],
         });
       }
-
       const url = `${WLED_URL}${URL_JSON_STATE}`;
       const options = {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify(state),
       };
-      imgDialog.close();
+      if (imgDialog && typeof imgDialog.close === "function") imgDialog.close();
       try {
         const response = await fetch(url, options);
-        const { success } = await response.json();
-
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const json = await response.json();
+        const success = json.success ?? json?.state?.on ?? true;
         if (success) {
-          if (existingPreset) {
-            toast(
-              `Preset '${presetsJson[existingPreset].n}' loaded`,
-              "success",
-              1000
-            );
+          playbackState.isPlaying = true;
+          playbackState.isStopped = false;
+          playbackState.lastImage = selectedImage;
+          updatePlayPauseButton();
+          if (existingPresetId !== null) {
+            toast(`Preset '${presetsJson[existingPresetId]?.n ?? existingPresetId}' loaded`, "success", 1000);
           } else {
             toast("Image changed", "success", 1000);
           }
         }
       } catch (error) {
-        console.error(error);
+        console.error("showImg():", error);
         toast("Failed to change image", "error");
       }
     }
 
     // save preset at new ID (highest preset ID+1), or overwrite existing preset
     async function savePreset() {
+      if (!selectedImage) {
+        toast("No image selected", "error");
+        return;
+      }
+
       await showImg();
       imgDialog.close();
       showLoading();
       await new Promise((resolve) => setTimeout(resolve, 500));
       await presets();
 
-      // find next lowest ID / ID of existing preset with segment name == image name
-      let existingPreset = false;
-      existingPreset = findPresetID(selectedImage.name);
-      let items = Object.keys(presetsJson);
-      const id = existingPreset || parseInt(items.pop()) + 1;
-      const pName = existingPreset
-        ? presetsJson[id].n
-        : selectedImage.name.substring(0, selectedImage.name.lastIndexOf("."));
+      // find existing preset ID by segment name
+      const existingPresetId = findPresetID(selectedImage.name);
+      // compute next free ID if not existing
+      const keys = Object.keys(presetsJson || {});
+      const numericKeys = keys
+        .map((k) => parseInt(k))
+        .filter((n) => !isNaN(n) && isFinite(n));
+      const maxKey = numericKeys.length ? Math.max(...numericKeys) : -1;
+      const nextId = maxKey + 1;
+      const idToUse = existingPresetId !== null ? existingPresetId : nextId;
+      const pName =
+        existingPresetId !== null
+          ? presetsJson[idToUse]?.n ?? selectedImage.name.substring(0, selectedImage.name.lastIndexOf("."))
+          : selectedImage.name.substring(0, selectedImage.name.lastIndexOf("."));
 
-      if (existingPreset) {
-        toast(`Preset '${pName}' already saved with ID ${id}`, "success");
-        hideLoading();
-        return;
-      }
-
-      let body = {};
-      Object.assign(body, {
-        psave: parseInt(id),
-        n: pName,
-      });
+      const body = {
+        psave: parseInt(idToUse), // save to this ID
+        n: pName,                 // preset name
+        ib: true,                 // include brightness
+        sb: true,                 // save segment bounds
+        include: true
+      };
 
       try {
-        const url = `${WLED_URL}/json`;
+        const url = `${WLED_URL}${URL_JSON}`;
         const options = {
           method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
           body: JSON.stringify(body),
         };
-        const response = await fetch(url, options);
-        const { success } = await response.json();
 
-        if (success) {
-          toast(
-            `${
-              existingPreset ? "Modified" : "Saved as"
-            }  preset '${pName}' with ID ${id}`,
-            "success",
-            8000
-          );
-          window.parent.postMessage("loadPresets", WLED_URL);
+        const response = await fetch(url, options);
+
+        if (!response.ok) {
+          throw new Error(`Save failed: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (data.success) {
+          toast(`${existingPresetId !== null ? "Modified" : "Saved as"} preset '${pName}' with ID ${idToUse}`, "success", 8000);
+
+          // ask parent to refresh if called from iframe
+          try {
+            window.parent?.postMessage?.("loadPresets", WLED_URL);
+          } catch (e) {}
+        } else {
+          throw new Error("WLED returned failure");
         }
       } catch (error) {
-        console.error(error);
+        console.error("savePreset():", error);
         toast("Error saving preset", "error");
       } finally {
         await new Promise((resolve) => setTimeout(resolve, 2000)); // Add a delay before refreshing presets
@@ -1085,6 +1335,11 @@
 
     async function upload() {
       const file = gId("source").files[0];
+      if (!file) {
+        toast("No file selected", "error");
+        return;
+      }
+      if (!validateFile(file)) return;
       let formData = new FormData();
       formData.append("data", file, `/${file.name}`);
 
@@ -1096,9 +1351,7 @@
       showLoading();
       try {
         const response = await fetch(url, options);
-        if (!response.ok) {
-          throw new Error(response.status);
-        }
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
         toast(`${file.name} successfully uploaded`, "success");
       } catch (error) {
         const msg = `Error uploading image: ${error}`;
@@ -1115,126 +1368,247 @@
       try {
         const options = {
           method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ on: false }),
         };
         const response = await fetch(url, options);
-        const { success } = await response.json();
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const json = await response.json();
+        const success = json.success ?? true;
         if (success) {
+          playbackState.isPlaying = false;
+          playbackState.isStopped = true;
+          updatePlayPauseButton();
           toast("Playback stopped", "success", 1000);
         }
       } catch (error) {
-        console.error(error);
+        console.error("powerOff():", error);
       }
     }
 
     async function playPause() {
       const url = `${WLED_URL}${URL_JSON_STATE}`;
+
+      // If stopped, restart with last image
+      if (playbackState.isStopped) {
+        if (playbackState.lastImage) {
+          selectedImage = playbackState.lastImage;
+          await showImg();
+        } else {
+          toast("No image to play. Select an image first.", "warning");
+        }
+        return;
+      }
+
+      // Otherwise toggle freeze
       try {
         const options = {
           method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ seg: { frz: "t" } }),
         };
         const response = await fetch(url, options);
-        const { success } = await response.json();
-        if (success) {
-          toast("Playback paused/resumed", "success", 1000);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const json = await response.json();
+        if (json.success ?? true) {
+          playbackState.isPlaying = !playbackState.isPlaying;
+          updatePlayPauseButton();
+          toast(playbackState.isPlaying ? "Playback resumed" : "Playback paused", "success", 1000);
         }
       } catch (error) {
-        console.error(error);
+        console.error("playPause():", error);
+      }
+    }
+
+    async function restoreCurrentImageFromWLED() {
+      try {
+        const response = await fetch(`${WLED_URL}${URL_JSON_STATE}`, { cache: "no-cache" });
+        if (!response.ok) return;
+
+        const state = await response.json();
+
+        // Reset to safe default state
+        playbackState.isPlaying = false;
+        playbackState.isStopped = true;
+        playbackState.lastImage = null;
+
+        // Must be powered ON
+        if (!state.on) {
+          updatePlayPauseButton();
+          return;
+        }
+
+        // Find the segment that is actually active (usually seg[0], but respect selected ones)
+        const segments = Array.isArray(state.seg) ? state.seg : [state.seg];
+        const activeSeg = segments.find(s => s.id === state.mainseg) || segments[0];
+
+        // Only restore if it's the Image effect (53) and has a filename
+        if (activeSeg && activeSeg.fx === FX_MODE_IMAGE && activeSeg.n && activeSeg.n.trim() !== "") {
+          const imageName = activeSeg.n.trim();
+
+          playbackState.lastImage = {
+            name: imageName,
+            src: `${WLED_URL}/${imageName}`,
+            path: `/${imageName}`
+          };
+
+          playbackState.isStopped = false;
+          playbackState.isPlaying = !activeSeg.frz;  // frozen = paused
+
+          toast(`Resumed "${imageName}"`, "success", 2000);
+        }
+        // In all other cases (Solid, other effects, no name, etc.): treat as stopped
+
+        updatePlayPauseButton();
+
+      } catch (e) {
+        console.debug("Failed to restore WLED state (offline or error)", e);
+        // On error: assume stopped (safe default)
+        playbackState.isPlaying = false;
+        playbackState.isStopped = true;
+        playbackState.lastImage = null;
+        updatePlayPauseButton();
       }
     }
 
     async function loadInfo(clearCache = false) {
-      // await loading of image list, actual images will load asynchronously
-      if (await images(clearCache)) {
-        // await loading of presets.json
+      try {
+        await images(clearCache);
         await presets();
-        // get storage used/total count
         storage();
+        await restoreCurrentImageFromWLED();
+      } catch (e) {
+        console.error("loadInfo():", e);
       }
     }
 
+    // returns numeric preset id or null
     function findPresetID(segmentName) {
-      items = Object.keys(presetsJson);
-      return items.find(
-        (key) =>
-          typeof presetsJson[key] === "object" &&
-          !presetsJson[key].playlist &&
-          presetsJson[key].seg &&
-          presetsJson[key].seg[0].fx === FX_MODE_IMAGE &&
-          presetsJson[key].seg[0].n === segmentName
-      );
+      if (!presetsJson || typeof presetsJson !== "object")
+        return null;
+
+      const keys = Object.keys(presetsJson);
+      for (let key of keys) {
+        const preset = presetsJson[key];
+        if (
+          typeof preset === "object" &&
+          !preset.playlist &&
+          preset.seg &&
+          Array.isArray(preset.seg) &&
+          preset.seg[0]?.fx === FX_MODE_IMAGE &&
+          preset.seg[0]?.n === segmentName
+        ) {
+          const nkey = parseInt(key);
+          return isNaN(nkey) ? key : nkey;
+        }
+      }
+      return null;
     }
 
     // ===================
     // Event Listeners
     // ===================
-    gId("btnShowImg").addEventListener("click", showImg, false);
-    gId("btnSavePreset").addEventListener("click", savePreset, false);
-    gId("btnDownloadImg").addEventListener("click", downloadImg, false);
-    gId("btnDeleteImg").addEventListener("click", deleteImage, false);
-    gId("dropzone").addEventListener("dragover", (e) => {
-      e.preventDefault();
-      gId("dropzone").classList.add("active");
-    });
-    gId("dropzone").addEventListener("dragleave", (e) =>
-      gId("dropzone").classList.remove("active")
-    );
-    gId("dropzone").addEventListener("drop", (e) => {
-      e.preventDefault();
-      if (!validateFile(e.dataTransfer.files[0])) return;
-      gId("source").files = e.dataTransfer.files;
-      upload();
-    });
-    gId("dropzone").addEventListener("click", () => gId("source").click());
-    gId("source").addEventListener("change", (e) => {
-      const { value } = e.target;
-      if (value) {
-        if (!validateFile(e.target.files[0])) return;
-        upload();
+    try {
+      const btnShow = gId("btnShowImg");
+      if (btnShow) btnShow.addEventListener("click", showImg, false);
+      const btnSave = gId("btnSavePreset");
+      if (btnSave) btnSave.addEventListener("click", savePreset, false);
+      const btnDownload = gId("btnDownloadImg");
+      if (btnDownload) btnDownload.addEventListener("click", downloadImg, false);
+      const btnDelete = gId("btnDeleteImg");
+      if (btnDelete) btnDelete.addEventListener("click", deleteImage, false);
+
+      const dropzone = gId("dropzone");
+      if (dropzone) {
+        dropzone.addEventListener("dragover", (e) => {
+          e.preventDefault();
+          dropzone.classList.add("active");
+        });
+        dropzone.addEventListener("dragleave", () =>
+          dropzone.classList.remove("active")
+        );
+        dropzone.addEventListener("drop", (e) => {
+          e.preventDefault();
+          if (!validateFile(e.dataTransfer.files[0])) return;
+          gId("source").files = e.dataTransfer.files;
+          upload();
+        });
+        dropzone.addEventListener("click", () => gId("source").click());
       }
-    });
-    // dismiss dialog when clicking somewhere other than its elements
-    doc.querySelectorAll("dialog").forEach((dialog) =>
-      dialog.addEventListener(
-        "click",
-        ({ target: dialog }) => {
-          if (dialog.nodeName === "DIALOG") dialog.close();
-        },
-        false
-      )
-    );
-    addButtonHighlightEvents(["btnStop", "btnPlayPause"]);
-    gId("btnStop").addEventListener("click", powerOff, false);
-    gId("btnPlayPause").addEventListener("click", playPause, false);
+
+      const sourceInput = gId("source");
+      if (sourceInput) {
+        sourceInput.addEventListener("change", (e) => {
+          const { value } = e.target;
+          if (value) {
+            if (!validateFile(e.target.files[0])) return;
+            upload();
+          }
+        });
+      }
+
+      // dismiss dialog when clicking somewhere other than its elements
+      doc.querySelectorAll("dialog").forEach((dialog) =>
+        dialog.addEventListener(
+          "click",
+          ({ target: dialogEl }) => {
+            if (dialogEl && dialogEl.nodeName === "DIALOG") dialogEl.close();
+          },
+          false
+        )
+      );
+
+      // Make sure to cleanup dialog previews when dialog closes
+      if (imgDialog) {
+        imgDialog.addEventListener("close", () => {
+          try {
+            const dialogImg = gId("imgDialogImg");
+            if (dialogImg) setElementBackgroundImage(dialogImg, null);
+          } catch (e) {}
+        }, false);
+      }
+
+      addButtonHighlightEvents(["btnStop", "btnPlayPause"]);
+      const btnStop = gId("btnStop");
+      if (btnStop) btnStop.addEventListener("click", powerOff, false);
+      const btnPlayPause = gId("btnPlayPause");
+      if (btnPlayPause) btnPlayPause.addEventListener("click", playPause, false);
+    } catch (e) {
+      console.error("Event listeners setup failed:", e);
+    }
 
     // ===================
     // Toast Helper
     // ===================
     function toast(message, type = "success", duration = 5000) {
-      const toast = doc.createElement("div");
-      const wait = 100;
-      toast.style.animation = "fadeInToast";
-      toast.style.animationDuration = `${duration + wait}ms`;
-      toast.style.animationTimingFunction = "linear";
-      toast.classList.add("toast", type);
-      const body = doc.createElement("span");
-      body.classList.add("toast-body");
-      body.textContent = message;
-      toast.appendChild(body);
-      const progress = doc.createElement("div");
-      progress.classList.add("toast-progress");
-      progress.style.animation = "progress";
-      progress.style.animationDuration = `${duration + wait}ms`;
-      progress.style.animationDelay = "0s";
-      toast.appendChild(progress);
-      gId("toast-container").appendChild(toast);
-      setTimeout(() => {
-        toast.style.opacity = 0;
+      try {
+        const toast = doc.createElement("div");
+        const wait = 100;
+        toast.style.animation = "fadeInToast";
+        toast.style.animationDuration = `${duration + wait}ms`;
+        toast.style.animationTimingFunction = "linear";
+        toast.classList.add("toast", type);
+        const body = doc.createElement("span");
+        body.classList.add("toast-body");
+        body.textContent = message;
+        toast.appendChild(body);
+        const progress = doc.createElement("div");
+        progress.classList.add("toast-progress");
+        progress.style.animation = "progress";
+        progress.style.animationDuration = `${duration + wait}ms`;
+        progress.style.animationDelay = "0s";
+        toast.appendChild(progress);
+        const container = gId("toast-container") || doc.body;
+        container.appendChild(toast);
         setTimeout(() => {
-          toast.remove();
-        }, wait);
-      }, duration);
+          toast.style.opacity = 0;
+          setTimeout(() => {
+            toast.remove();
+          }, wait);
+        }, duration);
+      } catch (e) {
+        console.error("toast error:", e);
+      }
     }
   </script>
 </html>
